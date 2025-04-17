@@ -2,11 +2,20 @@ import json
 import os
 import argparse
 import requests
+import time
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from typing import Dict, List, Any, Optional, Tuple
+import tkinter as tk
 
 # Define the file to store recipes
 RECIPES_FILE = '../kubejs-python/recipes.js'
+
+# Define the file to store addons database
+ADDONS_DB_FILE = 'addons_db.json'
+
+# Define the maximum age of the database in days before it needs to be updated
+DB_MAX_AGE_DAYS = 7
 
 # Initialize the recipes dictionary
 recipes: Dict[str, Dict[str, Any]] = {}
@@ -14,18 +23,98 @@ recipes: Dict[str, Dict[str, Any]] = {}
 # KubeJS Addons URL
 KUBEJS_ADDONS_URL = "https://kubejs.com/wiki/addons"
 
+def save_addons_to_db(addons: List[Dict[str, str]]) -> bool:
+    """Save addons to the local database file.
+
+    Args:
+        addons (List[Dict[str, str]]): The list of addons to save
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Create a database object with timestamp
+        db = {
+            "timestamp": datetime.now().isoformat(),
+            "addons": addons
+        }
+
+        with open(ADDONS_DB_FILE, 'w') as file:
+            json.dump(db, file, indent=4)
+
+        print(f"Saved {len(addons)} addons to local database.")
+        return True
+    except Exception as e:
+        print(f"Error saving addons to database: {str(e)}")
+        return False
+
+def load_addons_from_db() -> Tuple[List[Dict[str, str]], Optional[datetime]]:
+    """Load addons from the local database file.
+
+    Returns:
+        Tuple[List[Dict[str, str]], Optional[datetime]]: A tuple containing:
+            - List of addons
+            - Timestamp of the database (None if not available)
+    """
+    try:
+        if not os.path.exists(ADDONS_DB_FILE):
+            print("Addons database file not found.")
+            return [], None
+
+        with open(ADDONS_DB_FILE, 'r') as file:
+            db = json.load(file)
+
+        timestamp = None
+        if "timestamp" in db:
+            try:
+                timestamp = datetime.fromisoformat(db["timestamp"])
+            except ValueError:
+                print("Invalid timestamp format in database.")
+
+        addons = db.get("addons", [])
+        print(f"Loaded {len(addons)} addons from local database.")
+        return addons, timestamp
+    except Exception as e:
+        print(f"Error loading addons from database: {str(e)}")
+        return [], None
+
+def is_db_outdated(timestamp: Optional[datetime]) -> bool:
+    """Check if the database is outdated.
+
+    Args:
+        timestamp (Optional[datetime]): The timestamp of the database
+
+    Returns:
+        bool: True if outdated or timestamp is None, False otherwise
+    """
+    if timestamp is None:
+        return True
+
+    max_age = timedelta(days=DB_MAX_AGE_DAYS)
+    return datetime.now() - timestamp > max_age
+
 def fetch_kubejs_addons() -> List[Dict[str, str]]:
-    """Fetch KubeJS addons from the wiki page.
+    """Fetch KubeJS addons from the wiki page or local database.
 
     Returns:
         List[Dict[str, str]]: A list of dictionaries containing addon information
     """
+    # First try to load from local database
+    addons, timestamp = load_addons_from_db()
+
+    # If database exists and is not outdated, use it
+    if addons and not is_db_outdated(timestamp):
+        print("Using addons from local database.")
+        return addons
+
+    # Otherwise, try to fetch from the web
+    print("Fetching addons from the web...")
     try:
         response = requests.get(KUBEJS_ADDONS_URL)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        addons = []
+        web_addons = []
 
         # Find all addon links in the page
         # This is a generic approach and might need adjustment based on the actual page structure
@@ -36,14 +125,29 @@ def fetch_kubejs_addons() -> List[Dict[str, str]]:
                 href = link.get('href')
                 name = link.text.strip()
                 if href and name and '/wiki/addons/' in href:
-                    addons.append({
+                    web_addons.append({
                         'name': name,
                         'url': f"https://kubejs.com{href}" if href.startswith('/') else href
                     })
 
-        return addons
+        # If we got addons from the web, save them to the database
+        if web_addons:
+            save_addons_to_db(web_addons)
+            return web_addons
+
+        # If web fetch failed but we have old addons, use them
+        if addons:
+            print("Web fetch failed, using older addons from local database.")
+            return addons
+
+        # Otherwise, return empty list
+        return []
     except Exception as e:
-        print(f"Error fetching KubeJS addons: {str(e)}")
+        print(f"Error fetching KubeJS addons from web: {str(e)}")
+        # If web fetch failed but we have old addons, use them
+        if addons:
+            print("Using older addons from local database.")
+            return addons
         return []
 
 def choose_recipe_type() -> Tuple[bool, Optional[Dict[str, str]]]:
@@ -549,7 +653,8 @@ class RecipeManagerApp:
         self.addon_var = tk.StringVar()
         self.addon_combo = ttk.Combobox(self.addon_frame, textvariable=self.addon_var, width=40, state="readonly")
         self.addon_combo.pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(self.addon_frame, text="Fetch Addons", command=self.fetch_addons_for_gui).pack(side=tk.LEFT)
+        ttk.Button(self.addon_frame, text="Fetch Addons", command=self.fetch_addons_for_gui).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(self.addon_frame, text="Update Database", command=self.force_update_addons_database).pack(side=tk.LEFT)
 
         # Addon Info (initially hidden)
         self.addon_info_frame = ttk.LabelFrame(form_frame, text="Addon Information")
@@ -770,9 +875,10 @@ class RecipeManagerApp:
         if save_recipes():
             messagebox.showinfo("Success", "Recipe created successfully.")
             self.clear_add_form()
+            # Set the edit_recipe_var before updating the recipe list
+            self.edit_recipe_var.set(recipe_name)
             self.update_recipe_list()
             # Allow direct editing after creation
-            self.edit_recipe_var.set(recipe_name)
             self.load_recipe_for_edit()
             self.notebook.select(2)  # Switch to Edit tab
 
@@ -786,6 +892,68 @@ class RecipeManagerApp:
         else:
             self.addon_frame.grid_remove()
             self.addon_info_frame.grid_remove()
+
+    def force_update_addons_database(self):
+        """Force update the addons database from the web."""
+        try:
+            self.status_var.set("Forcing update of addons database...")
+            self.root.update_idletasks()  # Update the UI to show status
+
+            # Delete the existing database file if it exists
+            if os.path.exists(ADDONS_DB_FILE):
+                os.remove(ADDONS_DB_FILE)
+                print("Deleted existing addons database file.")
+
+            # Fetch addons from the web
+            response = requests.get(KUBEJS_ADDONS_URL)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            web_addons = []
+
+            main_content = soup.find('main')
+            if main_content:
+                addon_links = main_content.find_all('a')
+                for link in addon_links:
+                    href = link.get('href')
+                    name = link.text.strip()
+                    if href and name and '/wiki/addons/' in href:
+                        web_addons.append({
+                            'name': name,
+                            'url': f"https://kubejs.com{href}" if href.startswith('/') else href
+                        })
+
+            if not web_addons:
+                messagebox.showinfo("No Addons Found", "No addons found on the web.")
+                self.status_var.set("No addons found")
+                return
+
+            # Save the addons to the database
+            if save_addons_to_db(web_addons):
+                messagebox.showinfo("Success", f"Successfully updated addons database with {len(web_addons)} addons.")
+
+                # Update the GUI with the new addons
+                self.addons_data = web_addons
+
+                # Update the combo box with addon names
+                addon_names = [addon['name'] for addon in self.addons_data]
+                self.addon_combo['values'] = addon_names
+
+                # Select the first addon
+                if addon_names:
+                    self.addon_combo.current(0)
+                    self.update_addon_info()
+
+                # Show the addon info frame
+                self.addon_info_frame.grid()
+
+                self.status_var.set(f"Updated database with {len(web_addons)} addons")
+            else:
+                messagebox.showerror("Error", "Failed to save addons to database.")
+                self.status_var.set("Failed to update database")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error updating addons database: {str(e)}")
+            self.status_var.set("Error updating database")
 
     def fetch_addons_for_gui(self):
         """Fetch KubeJS addons for the GUI."""
