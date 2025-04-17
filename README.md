@@ -40,6 +40,19 @@ The tool supports various KubeJS recipe types, including:
 - Python 3.6 or higher
 - Tkinter (included in standard Python installation) for the GUI version
 
+This application uses only standard library modules, so you don't need to install any external dependencies or use a virtual environment.
+
+#### Installing Tkinter
+
+Tkinter is usually included with Python, but some installations might not have it. If you encounter an error like `ModuleNotFoundError: No module named '_tkinter'`, you need to install Tkinter:
+
+- **Ubuntu/Debian**: `sudo apt-get install python3-tk`
+- **Fedora**: `sudo dnf install python3-tkinter`
+- **macOS with Homebrew**: `brew install python-tk@3.x` (replace 3.x with your Python version)
+- **Windows**: Tkinter is included in the standard Python installer from python.org
+
+If you can't install Tkinter, you can still use the CLI mode with the `--cli` flag.
+
 ### Installation
 
 1. Clone or download this repository
@@ -56,6 +69,14 @@ Run the GUI version using Python (default):
 ```bash
 python kubejs.py
 ```
+
+When you run the application in GUI mode, it will:
+1. Attempt to launch the GUI window
+2. Ask you if you can see the GUI window
+3. If you can see it, you can proceed with using the GUI
+4. If you can't see it, you'll be asked if you want to try again or fall back to CLI mode
+
+This ensures that you can always use the application, even if there are issues with displaying the GUI.
 
 The GUI provides a more user-friendly interface with the following tabs:
 - **View Recipes**: Browse and manage existing recipes

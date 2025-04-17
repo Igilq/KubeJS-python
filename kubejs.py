@@ -1,12 +1,58 @@
 import json
 import os
 import argparse
-import requests
 import time
+import urllib.request
+import html.parser
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
 from typing import Dict, List, Any, Optional, Tuple
-import tkinter as tk
+
+# Custom HTML Parser to replace BeautifulSoup
+class KubeJSAddonParser(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.addons = []
+        self.in_main = False
+        self.current_tag = None
+        self.current_attrs = None
+        self.current_data = ""
+
+    def handle_starttag(self, tag, attrs):
+        self.current_tag = tag
+        self.current_attrs = dict(attrs)
+
+        # Check if we're entering the main content
+        if tag == 'main':
+            self.in_main = True
+
+        # If we're in the main content and find an 'a' tag, check if it's an addon link
+        if self.in_main and tag == 'a' and 'href' in dict(attrs):
+            self.current_data = ""  # Reset data for this tag
+
+    def handle_endtag(self, tag):
+        # If we're ending an 'a' tag and we're in the main content
+        if self.in_main and tag == 'a' and self.current_tag == 'a' and 'href' in self.current_attrs:
+            href = self.current_attrs['href']
+            name = self.current_data.strip()
+
+            # Check if this is an addon link
+            if href and name and '/wiki/addons/' in href:
+                self.addons.append({
+                    'name': name,
+                    'url': f"https://kubejs.com{href}" if href.startswith('/') else href
+                })
+
+        # If we're ending the main tag
+        if tag == 'main':
+            self.in_main = False
+
+        self.current_tag = None
+        self.current_attrs = None
+
+    def handle_data(self, data):
+        # If we're in an 'a' tag in the main content, collect the text
+        if self.in_main and self.current_tag == 'a':
+            self.current_data += data
 
 # Define the file to store recipes
 RECIPES_FILE = '../kubejs-python/recipes.js'
@@ -110,25 +156,19 @@ def fetch_kubejs_addons() -> List[Dict[str, str]]:
     # Otherwise, try to fetch from the web
     print("Fetching addons from the web...")
     try:
-        response = requests.get(KUBEJS_ADDONS_URL)
-        response.raise_for_status()  # Raise an exception for HTTP errors
+        # Use urllib.request instead of requests
+        with urllib.request.urlopen(KUBEJS_ADDONS_URL) as response:
+            # Check if the response is successful (200 OK)
+            if response.status != 200:
+                raise Exception(f"HTTP Error: {response.status}")
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        web_addons = []
+            # Read and decode the response
+            html_content = response.read().decode('utf-8')
 
-        # Find all addon links in the page
-        # This is a generic approach and might need adjustment based on the actual page structure
-        main_content = soup.find('main')
-        if main_content:
-            addon_links = main_content.find_all('a')
-            for link in addon_links:
-                href = link.get('href')
-                name = link.text.strip()
-                if href and name and '/wiki/addons/' in href:
-                    web_addons.append({
-                        'name': name,
-                        'url': f"https://kubejs.com{href}" if href.startswith('/') else href
-                    })
+            # Use our custom parser instead of BeautifulSoup
+            parser = KubeJSAddonParser()
+            parser.feed(html_content)
+            web_addons = parser.addons
 
         # If we got addons from the web, save them to the database
         if web_addons:
@@ -904,24 +944,19 @@ class RecipeManagerApp:
                 os.remove(ADDONS_DB_FILE)
                 print("Deleted existing addons database file.")
 
-            # Fetch addons from the web
-            response = requests.get(KUBEJS_ADDONS_URL)
-            response.raise_for_status()
+            # Fetch addons from the web using urllib.request
+            with urllib.request.urlopen(KUBEJS_ADDONS_URL) as response:
+                # Check if the response is successful (200 OK)
+                if response.status != 200:
+                    raise Exception(f"HTTP Error: {response.status}")
 
-            soup = BeautifulSoup(response.text, 'html.parser')
-            web_addons = []
+                # Read and decode the response
+                html_content = response.read().decode('utf-8')
 
-            main_content = soup.find('main')
-            if main_content:
-                addon_links = main_content.find_all('a')
-                for link in addon_links:
-                    href = link.get('href')
-                    name = link.text.strip()
-                    if href and name and '/wiki/addons/' in href:
-                        web_addons.append({
-                            'name': name,
-                            'url': f"https://kubejs.com{href}" if href.startswith('/') else href
-                        })
+                # Use our custom parser instead of BeautifulSoup
+                parser = KubeJSAddonParser()
+                parser.feed(html_content)
+                web_addons = parser.addons
 
             if not web_addons:
                 messagebox.showinfo("No Addons Found", "No addons found on the web.")
@@ -1190,8 +1225,40 @@ def run_gui() -> None:
         return
 
     try:
+        # Ask the user if they can see the GUI
+        print("Launching GUI window...")
+        print("A GUI window should appear shortly.")
+
         root = tk.Tk()
-        app = RecipeManagerApp(root)
+
+        # Create a function to check if GUI is visible
+        def check_gui_visible():
+            response = input("Can you see the GUI window? (yes/no): ").strip().lower()
+            if response == 'yes':
+                print("Great! You can now use the GUI interface.")
+                # Continue with the application
+                app = RecipeManagerApp(root)
+                root.deiconify()  # Make sure the window is visible
+                root.mainloop()
+            elif response == 'no':
+                retry = input("Would you like to try again? (yes/no): ").strip().lower()
+                if retry == 'yes':
+                    print("Trying to display the GUI again...")
+                    root.deiconify()  # Try to make the window visible again
+                    check_gui_visible()
+                else:
+                    print("Falling back to CLI mode...")
+                    root.destroy()
+                    run_cli()
+            else:
+                print("Please answer 'yes' or 'no'.")
+                check_gui_visible()
+
+        # Hide the root window initially
+        root.withdraw()
+
+        # Start the check after a short delay to allow the window to be created
+        root.after(500, check_gui_visible)
         root.mainloop()
     except Exception as e:
         if TKINTER_AVAILABLE:
