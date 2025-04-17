@@ -1,40 +1,114 @@
 import json
 import os
-import logging
 import argparse
-from typing import Dict, List, Any, Optional
-
-# Configure logging
-logging.basicConfig(
-    filename='../kubejs-python/recipe_log.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+import requests
+from bs4 import BeautifulSoup
+from typing import Dict, List, Any, Optional, Tuple
 
 # Define the file to store recipes
-RECIPES_FILE = '../kubejs-python/recipes.json'
+RECIPES_FILE = '../kubejs-python/recipes.js'
 
 # Initialize the recipes dictionary
 recipes: Dict[str, Dict[str, Any]] = {}
 
+# KubeJS Addons URL
+KUBEJS_ADDONS_URL = "https://kubejs.com/wiki/addons"
+
+def fetch_kubejs_addons() -> List[Dict[str, str]]:
+    """Fetch KubeJS addons from the wiki page.
+
+    Returns:
+        List[Dict[str, str]]: A list of dictionaries containing addon information
+    """
+    try:
+        response = requests.get(KUBEJS_ADDONS_URL)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        addons = []
+
+        # Find all addon links in the page
+        # This is a generic approach and might need adjustment based on the actual page structure
+        main_content = soup.find('main')
+        if main_content:
+            addon_links = main_content.find_all('a')
+            for link in addon_links:
+                href = link.get('href')
+                name = link.text.strip()
+                if href and name and '/wiki/addons/' in href:
+                    addons.append({
+                        'name': name,
+                        'url': f"https://kubejs.com{href}" if href.startswith('/') else href
+                    })
+
+        return addons
+    except Exception as e:
+        print(f"Error fetching KubeJS addons: {str(e)}")
+        return []
+
+def choose_recipe_type() -> Tuple[bool, Optional[Dict[str, str]]]:
+    """Ask user if they want to make normal Minecraft recipes or modded ones.
+
+    Returns:
+        Tuple[bool, Optional[Dict[str, str]]]: A tuple containing:
+            - bool: True if modded, False if normal
+            - Optional[Dict[str, str]]: Selected addon info if modded, None otherwise
+    """
+    print("\nDo you want to make a normal Minecraft recipe or a modded one?")
+    print("1. Normal Minecraft recipe")
+    print("2. Modded recipe (using KubeJS addons)")
+
+    choice = input("Enter your choice (1-2): ").strip()
+
+    if choice == '2':
+        # Fetch addons
+        print("\nFetching KubeJS addons...")
+        addons = fetch_kubejs_addons()
+
+        if not addons:
+            print("No addons found or error fetching addons. Defaulting to normal recipe.")
+            return False, None
+
+        print("\nAvailable KubeJS addons:")
+        for i, addon in enumerate(addons, 1):
+            print(f"{i}. {addon['name']}")
+
+        addon_choice = input(f"Enter addon number (1-{len(addons)}) or 0 to cancel: ").strip()
+
+        try:
+            addon_index = int(addon_choice) - 1
+            if addon_index == -1:  # User entered 0
+                print("Addon selection cancelled. Defaulting to normal recipe.")
+                return False, None
+            elif 0 <= addon_index < len(addons):
+                return True, addons[addon_index]
+            else:
+                print("Invalid selection. Defaulting to normal recipe.")
+                return False, None
+        except ValueError:
+            print("Invalid input. Defaulting to normal recipe.")
+            return False, None
+    else:
+        # Default to normal recipe for any input other than '2'
+        return False, None
+
 def load_recipes() -> None:
-    """Load recipes from the JSON file."""
+    """Load recipes from the JS file."""
     global recipes
     try:
         if os.path.exists(RECIPES_FILE):
             with open(RECIPES_FILE, 'r') as file:
                 recipes = json.load(file)
-            logging.info(f"Loaded {len(recipes)} recipes from {RECIPES_FILE}")
+            print(f"Loaded {len(recipes)} recipes from {RECIPES_FILE}")
         else:
-            logging.info(f"Recipe file {RECIPES_FILE} not found. Starting with empty recipe collection.")
+            print(f"Recipe file {RECIPES_FILE} not found. Starting with empty recipe collection.")
     except json.JSONDecodeError:
-        logging.error(f"Error decoding JSON from {RECIPES_FILE}. Starting with empty recipe collection.")
+        print(f"Error decoding JSON from {RECIPES_FILE}. Starting with empty recipe collection.")
     except Exception as e:
-        logging.error(f"Error loading recipes: {str(e)}")
+        print(f"Error loading recipes: {str(e)}")
 
 def save_recipes() -> bool:
-    """Save recipes to the JSON file.
+    """Save recipes to the JS file.
 
     Returns:
         bool: True if successful, False otherwise
@@ -42,10 +116,9 @@ def save_recipes() -> bool:
     try:
         with open(RECIPES_FILE, 'w') as file:
             json.dump(recipes, file, indent=4)
-        logging.info(f"Saved {len(recipes)} recipes to {RECIPES_FILE}")
+        print(f"Saved {len(recipes)} recipes to {RECIPES_FILE}")
         return True
     except Exception as e:
-        logging.error(f"Error saving recipes: {str(e)}")
         # Use messagebox in GUI mode if available, otherwise print
         if 'messagebox' in globals() and TKINTER_AVAILABLE:
             messagebox.showerror("Error", f"Error saving recipes: {str(e)}")
@@ -56,20 +129,54 @@ def save_recipes() -> bool:
 def create_recipe() -> None:
     """Create a new recipe and add it to the collection."""
     try:
-        recipe_id = input("Enter the recipe ID: ").strip()
-        if not recipe_id:
-            print("Recipe ID cannot be empty.")
-            logging.warning("Attempted to create recipe with empty ID")
+        recipe_name = input("Enter the recipe filename (without extension): ").strip()
+        if not recipe_name:
+            print("Recipe filename cannot be empty.")
             return
 
-        if recipe_id in recipes:
-            print("A recipe with this ID already exists.")
-            logging.warning(f"Attempted to create duplicate recipe with ID: {recipe_id}")
+        if recipe_name in recipes:
+            print("A recipe with this filename already exists.")
             return
 
-        recipe_type = input("Enter the recipe type (shaped, shapeless, smithing, smelting, etc.): ").strip()
-        if not recipe_type:
-            print("Recipe type cannot be empty.")
+        # Ask if user wants normal or modded recipe
+        is_modded, addon_info = choose_recipe_type()
+
+        # Define recipe types
+        recipe_types = [
+            "shaped",
+            "shapeless",
+            "smithing",
+            "smelting",
+            "blasting",
+            "smoking",
+            "campfire_cooking",
+            "stonecutting",
+            "brewing",
+            "custom"
+        ]
+
+        # If modded and addon info is available, display it
+        if is_modded and addon_info:
+            print(f"\nUsing addon: {addon_info['name']}")
+            print(f"Addon URL: {addon_info['url']}")
+            print("Note: You may need to refer to the addon documentation for specific recipe types and formats.")
+
+        # Display recipe types with numbers
+        print("\nSelect recipe type:")
+        for i, rt in enumerate(recipe_types, 1):
+            print(f"{i}. {rt}")
+
+        # Get user selection
+        selection = input("Enter number (1-10): ").strip()
+        try:
+            selection_index = int(selection) - 1
+            if 0 <= selection_index < len(recipe_types):
+                recipe_type = recipe_types[selection_index]
+            else:
+                print("Invalid selection. Please enter a number between 1 and 10.")
+                return
+        except ValueError:
+            print("Invalid input. Please enter a number.")
             return
 
         output = input("Enter the output item: ").strip()
@@ -94,81 +201,119 @@ def create_recipe() -> None:
             "ingredients": ingredients
         }
 
-        recipes[recipe_id] = recipe
+        # Add addon info if modded
+        if is_modded and addon_info:
+            recipe["addon"] = addon_info["name"]
+            recipe["addon_url"] = addon_info["url"]
+
+        recipes[recipe_name] = recipe
         if save_recipes():
             print("Recipe created successfully.")
-            logging.info(f"Created new recipe with ID: {recipe_id}")
+            # Allow direct editing after creation
+            edit_recipe(recipe_name)
 
     except Exception as e:
-        logging.error(f"Error creating recipe: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
-def edit_recipe() -> None:
+def edit_recipe(recipe_name: Optional[str] = None) -> None:
     """Edit an existing recipe."""
     try:
-        recipe_id = input("Enter the recipe ID to edit: ").strip()
-        if not recipe_id:
-            print("Recipe ID cannot be empty.")
+        if recipe_name is None:
+            recipe_name = input("Enter the recipe filename to edit: ").strip()
+
+        if not recipe_name:
+            print("Recipe filename cannot be empty.")
             return
 
-        if recipe_id not in recipes:
+        if recipe_name not in recipes:
             print("Recipe not found.")
-            logging.warning(f"Attempted to edit non-existent recipe with ID: {recipe_id}")
             return
 
         print("Current recipe:")
-        print(json.dumps(recipes[recipe_id], indent=4))
+        print(json.dumps(recipes[recipe_name], indent=4))
 
-        recipe_type = input("Enter the new recipe type (or press Enter to keep the current type): ").strip()
+        # Define recipe types
+        recipe_types = [
+            "shaped",
+            "shapeless",
+            "smithing",
+            "smelting",
+            "blasting",
+            "smoking",
+            "campfire_cooking",
+            "stonecutting",
+            "brewing",
+            "custom"
+        ]
+
+        # Display recipe types with numbers
+        print("Select recipe type (or press Enter to keep the current type):")
+        print("0. Keep current type")
+        for i, rt in enumerate(recipe_types, 1):
+            print(f"{i}. {rt}")
+
+        # Get user selection
+        selection = input("Enter number (0-10): ").strip()
+        if selection:
+            try:
+                selection_index = int(selection)
+                if selection_index == 0:
+                    recipe_type = ""  # Keep current type
+                elif 1 <= selection_index <= len(recipe_types):
+                    recipe_type = recipe_types[selection_index - 1]
+                else:
+                    print("Invalid selection. Using current type.")
+                    recipe_type = ""
+            except ValueError:
+                print("Invalid input. Using current type.")
+                recipe_type = ""
+        else:
+            recipe_type = ""  # Keep current type if Enter is pressed
+
         output = input("Enter the new output item (or press Enter to keep the current output): ").strip()
         ingredients_input = input("Enter the new ingredients (comma-separated, or press Enter to keep the current ingredients): ").strip()
 
         if recipe_type:
-            recipes[recipe_id]["type"] = recipe_type
+            recipes[recipe_name]["type"] = recipe_type
 
         if output:
-            recipes[recipe_id]["output"] = output
+            recipes[recipe_name]["output"] = output
 
         if ingredients_input:
             ingredients = [item.strip() for item in ingredients_input.split(',') if item.strip()]
             if ingredients:  # Only update if there's at least one valid ingredient
-                recipes[recipe_id]["ingredients"] = ingredients
+                recipes[recipe_name]["ingredients"] = ingredients
             else:
                 print("Warning: No valid ingredients provided. Keeping existing ingredients.")
 
         if save_recipes():
             print("Recipe edited successfully.")
-            logging.info(f"Edited recipe with ID: {recipe_id}")
 
     except Exception as e:
-        logging.error(f"Error editing recipe: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
 def delete_recipe() -> None:
     """Delete an existing recipe."""
     try:
-        recipe_id = input("Enter the recipe ID to delete: ").strip()
-        if not recipe_id:
-            print("Recipe ID cannot be empty.")
+        recipe_name = input("Enter the recipe filename to delete: ").strip()
+        if not recipe_name:
+            print("Recipe filename cannot be empty.")
             return
 
-        if recipe_id not in recipes:
+        if recipe_name not in recipes:
             print("Recipe not found.")
-            logging.warning(f"Attempted to delete non-existent recipe with ID: {recipe_id}")
             return
 
-        confirm = input(f"Are you sure you want to delete recipe '{recipe_id}'? (y/n): ").strip().lower()
+        confirm = input(f"Are you sure you want to delete recipe '{recipe_name}'? (y/n): ").strip().lower()
         if confirm != 'y':
             print("Deletion cancelled.")
             return
 
-        del recipes[recipe_id]
+        del recipes[recipe_name]
         if save_recipes():
             print("Recipe deleted successfully.")
-            logging.info(f"Deleted recipe with ID: {recipe_id}")
 
     except Exception as e:
-        logging.error(f"Error deleting recipe: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
 def view_recipes() -> None:
@@ -178,19 +323,16 @@ def view_recipes() -> None:
             print("No recipes found.")
             return
 
-        for recipe_id, recipe in recipes.items():
-            print(f"Recipe ID: {recipe_id}")
+        for recipe_name, recipe in recipes.items():
+            print(f"Recipe filename: {recipe_name}")
             print(json.dumps(recipe, indent=4))
             print("-" * 30)
 
-        logging.info("Viewed all recipes")
-
     except Exception as e:
-        logging.error(f"Error viewing recipes: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
 def search_recipe() -> None:
-    """Search for recipes by ID or content."""
+    """Search for recipes by filename or content."""
     try:
         if not recipes:
             print("No recipes found.")
@@ -203,11 +345,11 @@ def search_recipe() -> None:
 
         found = False
 
-        for recipe_id, recipe in recipes.items():
-            # Search in recipe ID
-            if search_term in recipe_id.lower():
+        for recipe_name, recipe in recipes.items():
+            # Search in recipe filename
+            if search_term in recipe_name.lower():
                 found = True
-                print(f"Recipe ID: {recipe_id}")
+                print(f"Recipe filename: {recipe_name}")
                 print(json.dumps(recipe, indent=4))
                 print("-" * 30)
                 continue
@@ -216,38 +358,33 @@ def search_recipe() -> None:
             recipe_str = json.dumps(recipe).lower()
             if search_term in recipe_str:
                 found = True
-                print(f"Recipe ID: {recipe_id}")
+                print(f"Recipe filename: {recipe_name}")
                 print(json.dumps(recipe, indent=4))
                 print("-" * 30)
 
         if not found:
             print(f"No recipes found matching '{search_term}'.")
-        else:
-            logging.info(f"Searched for recipes with term: {search_term}")
 
     except Exception as e:
-        logging.error(f"Error searching recipes: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
 def export_recipes() -> None:
     """Export recipes to a different file."""
     try:
-        filename = input("Enter export filename (e.g., export.json): ").strip()
+        filename = input("Enter export filename (e.g., export.js): ").strip()
         if not filename:
             print("Filename cannot be empty.")
             return
 
-        if not filename.endswith('.json'):
-            filename += '.json'
+        if not filename.endswith('.js'):
+            filename += '.js'
 
         with open(filename, 'w') as file:
             json.dump(recipes, file, indent=4)
 
         print(f"Recipes exported successfully to {filename}.")
-        logging.info(f"Exported recipes to {filename}")
 
     except Exception as e:
-        logging.error(f"Error exporting recipes: {str(e)}")
         print(f"An error occurred: {str(e)}")
 
 def run_cli() -> None:
@@ -282,7 +419,6 @@ def run_cli() -> None:
         elif choice == '6':
             export_recipes()
         elif choice == '7':
-            logging.info("Application exited")
             print("Thank you for using KubeJS Recipe Manager!")
             break
         else:
@@ -391,32 +527,63 @@ class RecipeManagerApp:
         form_frame = ttk.Frame(add_tab, padding="10")
         form_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Recipe ID
-        ttk.Label(form_frame, text="Recipe ID:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.add_id_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.add_id_var, width=40).grid(row=0, column=1, sticky=tk.W, pady=5)
+        # Recipe filename
+        ttk.Label(form_frame, text="Recipe filename:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.add_name_var = tk.StringVar()
+        ttk.Entry(form_frame, textvariable=self.add_name_var, width=40).grid(row=0, column=1, sticky=tk.W, pady=5)
+
+        # Recipe Mode (Normal or Modded)
+        ttk.Label(form_frame, text="Recipe Mode:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.add_mode_var = tk.StringVar(value="Normal")
+        mode_frame = ttk.Frame(form_frame)
+        mode_frame.grid(row=1, column=1, sticky=tk.W, pady=5)
+        ttk.Radiobutton(mode_frame, text="Normal Minecraft", variable=self.add_mode_var, value="Normal", command=self.toggle_addon_selection).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(mode_frame, text="Modded (KubeJS Addons)", variable=self.add_mode_var, value="Modded", command=self.toggle_addon_selection).pack(side=tk.LEFT)
+
+        # Addon Selection (initially hidden)
+        self.addon_frame = ttk.Frame(form_frame)
+        self.addon_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
+        self.addon_frame.grid_remove()  # Hide initially
+
+        ttk.Label(self.addon_frame, text="Select Addon:").pack(side=tk.LEFT, padx=(0, 5))
+        self.addon_var = tk.StringVar()
+        self.addon_combo = ttk.Combobox(self.addon_frame, textvariable=self.addon_var, width=40, state="readonly")
+        self.addon_combo.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(self.addon_frame, text="Fetch Addons", command=self.fetch_addons_for_gui).pack(side=tk.LEFT)
+
+        # Addon Info (initially hidden)
+        self.addon_info_frame = ttk.LabelFrame(form_frame, text="Addon Information")
+        self.addon_info_frame.grid(row=3, column=0, columnspan=2, sticky=tk.W+tk.E, pady=5)
+        self.addon_info_frame.grid_remove()  # Hide initially
+
+        self.addon_info_text = scrolledtext.ScrolledText(self.addon_info_frame, width=60, height=3, wrap=tk.WORD)
+        self.addon_info_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.addon_info_text.config(state=tk.DISABLED)
+
+        # Store addon data
+        self.addons_data = []
 
         # Recipe Type
-        ttk.Label(form_frame, text="Recipe Type:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="Recipe Type:").grid(row=4, column=0, sticky=tk.W, pady=5)
         self.add_type_var = tk.StringVar()
         type_combo = ttk.Combobox(form_frame, textvariable=self.add_type_var, width=38)
-        type_combo['values'] = ('shaped', 'shapeless', 'smithing', 'smelting', 'blasting', 'smoking', 'campfire_cooking')
-        type_combo.grid(row=1, column=1, sticky=tk.W, pady=5)
+        type_combo['values'] = ('shaped', 'shapeless', 'smithing', 'smelting', 'blasting', 'smoking', 'campfire_cooking', 'stonecutting', 'brewing', 'custom')
+        type_combo.grid(row=4, column=1, sticky=tk.W, pady=5)
 
         # Output
-        ttk.Label(form_frame, text="Output Item:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="Output Item:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.add_output_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.add_output_var, width=40).grid(row=2, column=1, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.add_output_var, width=40).grid(row=5, column=1, sticky=tk.W, pady=5)
 
         # Ingredients
-        ttk.Label(form_frame, text="Ingredients:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        ttk.Label(form_frame, text="(comma-separated)").grid(row=4, column=0, sticky=tk.W)
+        ttk.Label(form_frame, text="Ingredients:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="(comma-separated)").grid(row=7, column=0, sticky=tk.W)
         self.add_ingredients_text = scrolledtext.ScrolledText(form_frame, width=40, height=10, wrap=tk.WORD)
-        self.add_ingredients_text.grid(row=3, column=1, rowspan=2, sticky=tk.W, pady=5)
+        self.add_ingredients_text.grid(row=6, column=1, rowspan=2, sticky=tk.W, pady=5)
 
         # Buttons
         button_frame = ttk.Frame(form_frame)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=8, column=0, columnspan=2, pady=10)
 
         ttk.Button(button_frame, text="Clear Form", command=self.clear_add_form).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Add Recipe", command=self.add_recipe).pack(side=tk.LEFT)
@@ -445,7 +612,7 @@ class RecipeManagerApp:
         ttk.Label(form_frame, text="Recipe Type:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.edit_type_var = tk.StringVar()
         type_combo = ttk.Combobox(form_frame, textvariable=self.edit_type_var, width=38)
-        type_combo['values'] = ('shaped', 'shapeless', 'smithing', 'smelting', 'blasting', 'smoking', 'campfire_cooking')
+        type_combo['values'] = ('shaped', 'shapeless', 'smithing', 'smelting', 'blasting', 'smoking', 'campfire_cooking', 'stonecutting', 'brewing', 'custom')
         type_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
 
         # Output
@@ -498,11 +665,11 @@ class RecipeManagerApp:
             self.status_var.set("No recipes found")
             return
 
-        recipe_ids = sorted(recipes.keys())
-        for recipe_id in recipe_ids:
-            self.recipe_listbox.insert(tk.END, recipe_id)
+        recipe_names = sorted(recipes.keys())
+        for recipe_name in recipe_names:
+            self.recipe_listbox.insert(tk.END, recipe_name)
 
-        self.edit_recipe_combo['values'] = recipe_ids
+        self.edit_recipe_combo['values'] = recipe_names
         self.status_var.set(f"Loaded {len(recipes)} recipes")
 
     def on_recipe_select(self, event):
@@ -511,20 +678,20 @@ class RecipeManagerApp:
         if not selection:
             return
 
-        recipe_id = self.recipe_listbox.get(selection[0])
-        self.display_recipe_details(recipe_id)
+        recipe_name = self.recipe_listbox.get(selection[0])
+        self.display_recipe_details(recipe_name)
 
-    def display_recipe_details(self, recipe_id):
+    def display_recipe_details(self, recipe_name):
         """Display recipe details in the view tab."""
-        if recipe_id not in recipes:
+        if recipe_name not in recipes:
             return
 
-        recipe = recipes[recipe_id]
+        recipe = recipes[recipe_name]
 
         self.recipe_details.config(state=tk.NORMAL)
         self.recipe_details.delete(1.0, tk.END)
 
-        self.recipe_details.insert(tk.END, f"Recipe ID: {recipe_id}\n\n")
+        self.recipe_details.insert(tk.END, f"Recipe filename: {recipe_name}\n\n")
         self.recipe_details.insert(tk.END, f"Type: {recipe['type']}\n\n")
         self.recipe_details.insert(tk.END, f"Output: {recipe['output']}\n\n")
         self.recipe_details.insert(tk.END, "Ingredients:\n")
@@ -536,18 +703,19 @@ class RecipeManagerApp:
 
     def add_recipe(self):
         """Add a new recipe."""
-        recipe_id = self.add_id_var.get().strip()
+        recipe_name = self.add_name_var.get().strip()
         recipe_type = self.add_type_var.get().strip()
         output = self.add_output_var.get().strip()
         ingredients_input = self.add_ingredients_text.get(1.0, tk.END).strip()
+        is_modded = self.add_mode_var.get() == "Modded"
 
         # Validate inputs
-        if not recipe_id:
-            messagebox.showerror("Error", "Recipe ID cannot be empty.")
+        if not recipe_name:
+            messagebox.showerror("Error", "Recipe filename cannot be empty.")
             return
 
-        if recipe_id in recipes:
-            messagebox.showerror("Error", "A recipe with this ID already exists.")
+        if recipe_name in recipes:
+            messagebox.showerror("Error", "A recipe with this filename already exists.")
             return
 
         if not recipe_type:
@@ -568,6 +736,24 @@ class RecipeManagerApp:
             messagebox.showerror("Error", "At least one valid ingredient is required.")
             return
 
+        # Check if modded and addon is selected
+        addon_info = None
+        if is_modded:
+            selected_addon = self.addon_var.get()
+            if not selected_addon:
+                messagebox.showerror("Error", "Please select an addon or switch to Normal recipe mode.")
+                return
+
+            # Find the selected addon in the data
+            for addon in self.addons_data:
+                if addon['name'] == selected_addon:
+                    addon_info = addon
+                    break
+
+            if not addon_info:
+                messagebox.showerror("Error", "Selected addon information not found.")
+                return
+
         # Create recipe
         recipe = {
             "type": recipe_type,
@@ -575,19 +761,98 @@ class RecipeManagerApp:
             "ingredients": ingredients
         }
 
-        recipes[recipe_id] = recipe
+        # Add addon info if modded
+        if is_modded and addon_info:
+            recipe["addon"] = addon_info["name"]
+            recipe["addon_url"] = addon_info["url"]
+
+        recipes[recipe_name] = recipe
         if save_recipes():
             messagebox.showinfo("Success", "Recipe created successfully.")
-            logging.info(f"Created new recipe with ID: {recipe_id}")
             self.clear_add_form()
             self.update_recipe_list()
+            # Allow direct editing after creation
+            self.edit_recipe_var.set(recipe_name)
+            self.load_recipe_for_edit()
+            self.notebook.select(2)  # Switch to Edit tab
+
+    def toggle_addon_selection(self):
+        """Show or hide addon selection based on recipe mode."""
+        if self.add_mode_var.get() == "Modded":
+            self.addon_frame.grid()
+            # If we already have addons data, show the addon info frame
+            if self.addons_data:
+                self.addon_info_frame.grid()
+        else:
+            self.addon_frame.grid_remove()
+            self.addon_info_frame.grid_remove()
+
+    def fetch_addons_for_gui(self):
+        """Fetch KubeJS addons for the GUI."""
+        try:
+            self.status_var.set("Fetching KubeJS addons...")
+            self.root.update_idletasks()  # Update the UI to show status
+
+            # Fetch addons
+            self.addons_data = fetch_kubejs_addons()
+
+            if not self.addons_data:
+                messagebox.showinfo("No Addons Found", "No addons found or error fetching addons.")
+                self.status_var.set("No addons found")
+                return
+
+            # Update the combo box with addon names
+            addon_names = [addon['name'] for addon in self.addons_data]
+            self.addon_combo['values'] = addon_names
+
+            # Select the first addon
+            if addon_names:
+                self.addon_combo.current(0)
+                self.update_addon_info()
+
+            # Show the addon info frame
+            self.addon_info_frame.grid()
+
+            # Bind the combobox selection event
+            self.addon_combo.bind('<<ComboboxSelected>>', lambda e: self.update_addon_info())
+
+            self.status_var.set(f"Fetched {len(self.addons_data)} KubeJS addons")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error fetching addons: {str(e)}")
+            self.status_var.set("Error fetching addons")
+
+    def update_addon_info(self):
+        """Update the addon information text."""
+        selected_addon = self.addon_var.get()
+        if not selected_addon:
+            return
+
+        # Find the selected addon in the data
+        addon_info = None
+        for addon in self.addons_data:
+            if addon['name'] == selected_addon:
+                addon_info = addon
+                break
+
+        if not addon_info:
+            return
+
+        # Update the addon info text
+        self.addon_info_text.config(state=tk.NORMAL)
+        self.addon_info_text.delete(1.0, tk.END)
+        self.addon_info_text.insert(tk.END, f"Name: {addon_info['name']}\n")
+        self.addon_info_text.insert(tk.END, f"URL: {addon_info['url']}\n")
+        self.addon_info_text.insert(tk.END, "Note: You may need to refer to the addon documentation for specific recipe types and formats.")
+        self.addon_info_text.config(state=tk.DISABLED)
 
     def clear_add_form(self):
         """Clear the add recipe form."""
-        self.add_id_var.set("")
+        self.add_name_var.set("")
+        self.add_mode_var.set("Normal")
         self.add_type_var.set("")
         self.add_output_var.set("")
         self.add_ingredients_text.delete(1.0, tk.END)
+        self.toggle_addon_selection()  # Hide addon selection
 
     def on_edit_recipe_select(self, event):
         """Handle recipe selection in the edit tab."""
@@ -595,12 +860,12 @@ class RecipeManagerApp:
 
     def load_recipe_for_edit(self):
         """Load a recipe for editing."""
-        recipe_id = self.edit_recipe_var.get()
-        if not recipe_id or recipe_id not in recipes:
+        recipe_name = self.edit_recipe_var.get()
+        if not recipe_name or recipe_name not in recipes:
             messagebox.showerror("Error", "Please select a valid recipe.")
             return
 
-        recipe = recipes[recipe_id]
+        recipe = recipes[recipe_name]
 
         self.edit_type_var.set(recipe['type'])
         self.edit_output_var.set(recipe['output'])
@@ -614,8 +879,8 @@ class RecipeManagerApp:
 
     def save_edited_recipe(self):
         """Save the edited recipe."""
-        recipe_id = self.edit_recipe_var.get()
-        if not recipe_id or recipe_id not in recipes:
+        recipe_name = self.edit_recipe_var.get()
+        if not recipe_name or recipe_name not in recipes:
             messagebox.showerror("Error", "Please select a valid recipe.")
             return
 
@@ -643,13 +908,12 @@ class RecipeManagerApp:
             return
 
         # Update recipe
-        recipes[recipe_id]['type'] = recipe_type
-        recipes[recipe_id]['output'] = output
-        recipes[recipe_id]['ingredients'] = ingredients
+        recipes[recipe_name]['type'] = recipe_type
+        recipes[recipe_name]['output'] = output
+        recipes[recipe_name]['ingredients'] = ingredients
 
         if save_recipes():
             messagebox.showinfo("Success", "Recipe updated successfully.")
-            logging.info(f"Updated recipe with ID: {recipe_id}")
             self.update_recipe_list()
 
     def edit_selected_recipe(self):
@@ -659,8 +923,8 @@ class RecipeManagerApp:
             messagebox.showerror("Error", "Please select a recipe to edit.")
             return
 
-        recipe_id = self.recipe_listbox.get(selection[0])
-        self.edit_recipe_var.set(recipe_id)
+        recipe_name = self.recipe_listbox.get(selection[0])
+        self.edit_recipe_var.set(recipe_name)
         self.load_recipe_for_edit()
         self.notebook.select(2)  # Switch to Edit tab
 
@@ -671,16 +935,15 @@ class RecipeManagerApp:
             messagebox.showerror("Error", "Please select a recipe to delete.")
             return
 
-        recipe_id = self.recipe_listbox.get(selection[0])
+        recipe_name = self.recipe_listbox.get(selection[0])
 
-        confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete recipe '{recipe_id}'?")
+        confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete recipe '{recipe_name}'?")
         if not confirm:
             return
 
-        del recipes[recipe_id]
+        del recipes[recipe_name]
         if save_recipes():
             messagebox.showinfo("Success", "Recipe deleted successfully.")
-            logging.info(f"Deleted recipe with ID: {recipe_id}")
             self.update_recipe_list()
             self.recipe_details.config(state=tk.NORMAL)
             self.recipe_details.delete(1.0, tk.END)
@@ -699,11 +962,11 @@ class RecipeManagerApp:
 
         found = False
 
-        for recipe_id, recipe in recipes.items():
-            # Search in recipe ID
-            if search_term in recipe_id.lower():
+        for recipe_name, recipe in recipes.items():
+            # Search in recipe filename
+            if search_term in recipe_name.lower():
                 found = True
-                self.search_results.insert(tk.END, f"Recipe ID: {recipe_id}\n")
+                self.search_results.insert(tk.END, f"Recipe filename: {recipe_name}\n")
                 self.search_results.insert(tk.END, json.dumps(recipe, indent=4) + "\n")
                 self.search_results.insert(tk.END, "-" * 30 + "\n")
                 continue
@@ -712,22 +975,20 @@ class RecipeManagerApp:
             recipe_str = json.dumps(recipe).lower()
             if search_term in recipe_str:
                 found = True
-                self.search_results.insert(tk.END, f"Recipe ID: {recipe_id}\n")
+                self.search_results.insert(tk.END, f"Recipe filename: {recipe_name}\n")
                 self.search_results.insert(tk.END, json.dumps(recipe, indent=4) + "\n")
                 self.search_results.insert(tk.END, "-" * 30 + "\n")
 
         if not found:
             self.search_results.insert(tk.END, f"No recipes found matching '{search_term}'.")
-        else:
-            logging.info(f"Searched for recipes with term: {search_term}")
 
         self.search_results.config(state=tk.DISABLED)
 
     def export_recipes(self):
         """Export recipes to a different file."""
         filename = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            defaultextension=".js",
+            filetypes=[("JavaScript files", "*.js"), ("All files", "*.*")],
             title="Export Recipes"
         )
 
@@ -739,9 +1000,7 @@ class RecipeManagerApp:
                 json.dump(recipes, file, indent=4)
 
             messagebox.showinfo("Success", f"Recipes exported successfully to {filename}.")
-            logging.info(f"Exported recipes to {filename}")
         except Exception as e:
-            logging.error(f"Error exporting recipes: {str(e)}")
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
     def show_about(self):
@@ -758,7 +1017,8 @@ def run_gui() -> None:
     """Run the GUI version of the KubeJS Recipe Manager."""
     if not TKINTER_AVAILABLE:
         print("Error: Tkinter is not available. Cannot run GUI mode.")
-        logging.error("Attempted to run GUI mode but Tkinter is not available")
+        print("Falling back to CLI mode...")
+        run_cli()
         return
 
     try:
@@ -766,7 +1026,6 @@ def run_gui() -> None:
         app = RecipeManagerApp(root)
         root.mainloop()
     except Exception as e:
-        logging.critical(f"Unhandled exception in GUI mode: {str(e)}")
         if TKINTER_AVAILABLE:
             messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
         else:
@@ -775,21 +1034,21 @@ def run_gui() -> None:
 def main() -> None:
     """Main function to run the KubeJS Recipe Manager."""
     parser = argparse.ArgumentParser(description='KubeJS Recipe Manager')
-    parser.add_argument('--gui', action='store_true', help='Run in GUI mode')
+    parser.add_argument('--gui', action='store_true', help='Run in GUI mode (default)')
+    parser.add_argument('--cli', action='store_true', help='Run in CLI mode')
     args = parser.parse_args()
 
-    if args.gui:
-        run_gui()
-    else:
+    # Try to run GUI first unless CLI is explicitly requested
+    if args.cli:
         run_cli()
+    else:
+        # Try to run GUI, will fall back to CLI if Tkinter is not available
+        run_gui()
 
 if __name__ == "__main__":
     try:
-        logging.info("Application started")
         main()
     except KeyboardInterrupt:
-        logging.info("Application terminated by user (KeyboardInterrupt)")
         print("\nApplication terminated by user.")
     except Exception as e:
-        logging.critical(f"Unhandled exception: {str(e)}")
         print(f"An unexpected error occurred: {str(e)}")
