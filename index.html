@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KubeJS Recipe Manager</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #app {
+      padding: 20px;
+    }
+    textarea, input {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    ul {
+      list-style-type: none;
+      padding: 0;
+    }
+    li {
+      margin: 5px 0;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <h1>KubeJS Recipe Manager</h1>
+  <div id="modpackLoader">
+    <h2>Wczytaj Modpack</h2>
+    <input type="text" id="modpackPath" placeholder="Podaj ścieżkę do modpacka" />
+    <button onclick="loadBlocks()">Wczytaj Bloki</button>
+  </div>
+  <div id="blocksList">
+    <h2>Dostępne Bloki</h2>
+    <ul id="blocks"></ul>
+  </div>
+  <div id="recipeEditor">
+    <h2>Edytor Przepisu</h2>
+    <textarea id="recipeEditorArea" placeholder="Wprowadź JSON przepisu"></textarea>
+    <button onclick="saveRecipe()">Zapisz Przepis</button>
+    <button onclick="loadRecipe()">Wczytaj Przepis</button>
+  </div>
+</div>
+<script src="renderer.js"></script>
+</body>
+</html>
