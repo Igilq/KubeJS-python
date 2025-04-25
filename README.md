@@ -40,7 +40,42 @@ The tool supports various KubeJS recipe types, including:
 - Python 3.6 or higher
 - Tkinter (included in standard Python installation) for the GUI version
 
-This application uses only standard library modules, so you don't need to install any external dependencies or use a virtual environment.
+### Installation and Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/KubeJS-Recipe-Manager.git
+   cd KubeJS-Recipe-Manager
+   ```
+
+2. Set up a virtual environment (recommended):
+   ```bash
+   # Create a virtual environment
+   python -m venv .venv
+
+   # Activate the virtual environment
+   # On Windows:
+   .venv\Scripts\activate
+   # On macOS/Linux:
+   source .venv/bin/activate
+   ```
+
+3. Install development dependencies (optional):
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Make the script executable (Unix-like systems):
+   ```bash
+   chmod +x kubejs.py
+   ```
+
+5. Configuration:
+   - The application uses a `config.json` file to store configuration settings
+   - By default, recipes are stored in `recipes.json` in the project directory
+   - You can modify settings in the config file to change file paths and other options
+
+The core application uses only standard library modules, so you don't need to install any external dependencies for basic functionality.
 
 #### Installing Tkinter
 
@@ -131,35 +166,46 @@ Here's an example of creating a simple crafting recipe using the command-line in
 
 #### GUI Version
 
-Here's how to create a normal recipe using the graphical interface:
+Run the GUI version using Python (default):
 
-1. Run `python kubejs.py` (or without any arguments)
-2. Click on the "Add Recipe" tab
-3. Fill in the recipe details:
-   - Recipe filename: Enter a unique identifier (e.g., "diamond_sword")
-   - Recipe Mode: Select "Normal Minecraft"
-   - Recipe Type: Select from the dropdown or type (e.g., "shaped")
-   - Output Item: Enter the item ID (e.g., "minecraft:diamond_sword")
-   - Ingredients: Enter comma-separated ingredients (e.g., "minecraft:stick,minecraft:diamond")
-4. Click the "Add Recipe" button to save the recipe
-5. The editor will automatically open the recipe in the Edit tab for further modifications
+```bash
+# With virtual environment activated
+python kubejs.py
 
-### Creating a Modded Recipe with KubeJS Addons
+# Or directly with the executable (Unix-like systems)
+./kubejs.py
 
-#### CLI Version
+# Explicitly specify GUI mode
+python kubejs.py --gui
+```
 
-Here's an example of creating a modded recipe using the command-line interface:
+When you run the application in GUI mode, it will:
+1. Attempt to launch the GUI window
+2. Ask you if you can see the GUI window
+3. If you can see it, you can proceed with using the GUI
+4. If you can't see it, you'll be asked if you want to try again or fall back to CLI mode
 
-1. Run `python kubejs.py --cli`
-2. Select option 1 to create a new recipe
-3. Enter a unique recipe filename (e.g., "modded_item")
-4. When asked if you want to make a normal Minecraft recipe or a modded one, select option 2 for modded
-5. The application will fetch available KubeJS addons and display them
-6. Select an addon by entering its number
-7. Enter the recipe type (e.g., "custom")
-8. Enter the output item (e.g., "modpack:special_item")
-9. Enter the ingredients (e.g., "minecraft:diamond,minecraft:emerald")
-10. The editor will automatically open to allow you to make additional changes
+This ensures that you can always use the application, even if there are issues with displaying the GUI.
+
+The GUI provides a more user-friendly interface with the following tabs:
+- **View Recipes**: Browse and manage existing recipes
+- **Add Recipe**: Create new recipes with a form interface (now with direct editing after creation)
+- **Edit Recipe**: Modify existing recipes
+- **Search Recipes**: Find recipes by filename or content
+
+#### Command-Line Interface (CLI)
+
+If you prefer to use the CLI version, you can run it using Python with the --cli flag:
+
+```bash
+# With virtual environment activated
+python kubejs.py --cli
+
+# Or directly with the executable (Unix-like systems)
+./kubejs.py --cli
+```
+
+Follow the on-screen prompts to manage your recipes.
 
 #### GUI Version
 
@@ -181,7 +227,10 @@ Here's how to create a modded recipe using the graphical interface:
 ## File Structure
 
 - `kubejs.py`: The main script that supports both CLI and GUI modes
-- `recipes.js`: The file where recipes are stored in JavaScript format
+- `recipes.json`: The file where recipes are stored in JSON format
+- `config.json`: Configuration file for application settings
+- `requirements.txt`: List of development dependencies
+- `README.md`: Documentation (this file)
 
 ## Contributing
 

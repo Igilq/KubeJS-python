@@ -1,11 +1,15 @@
+#!/usr/bin/env python3
 import json
 import os
 import argparse
 import time
 import urllib.request
 import html.parser
+import logging
+import sys
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
 
 # Custom HTML Parser to replace BeautifulSoup
 class KubeJSAddonParser(html.parser.HTMLParser):
@@ -54,20 +58,99 @@ class KubeJSAddonParser(html.parser.HTMLParser):
         if self.in_main and self.current_tag == 'a':
             self.current_data += data
 
-# Define the file to store recipes
-RECIPES_FILE = '../kubejs-python/recipes.js'
+# Configuration management
+CONFIG_FILE = 'config.json'
 
-# Define the file to store addons database
-ADDONS_DB_FILE = 'addons_db.json'
+# Initialize with basic logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
-# Define the maximum age of the database in days before it needs to be updated
-DB_MAX_AGE_DAYS = 7
+def load_config():
+    """Load configuration from config.json or create with defaults if it doesn't exist."""
+    default_config = {
+        "paths": {
+            "recipes_file": "recipes.json",
+            "addons_db_file": "addons_db.json",
+            "export_default": "export.js"
+        },
+        "settings": {
+            "db_max_age_days": 7,
+            "kubejs_addons_url": "https://kubejs.com/wiki/addons"
+        },
+        "logging": {
+            "level": "INFO",
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            "file": "kubejs_manager.log"
+        }
+    }
+    
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                logging.info(f"Configuration loaded from {CONFIG_FILE}")
+                return config
+        else:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(default_config, f, indent=4)
+                logging.info(f"Created default configuration in {CONFIG_FILE}")
+                return default_config
+    except Exception as e:
+        logging.error(f"Error loading configuration: {str(e)}")
+        logging.info("Using default configuration")
+        return default_config
+
+# Set up logging configuration from the config file
+def setup_logging(config):
+    """Set up logging with configuration settings."""
+    log_config = config.get("logging", {})
+    log_level_str = log_config.get("level", "INFO")
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    log_format = log_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    log_file = log_config.get("file", "kubejs_manager.log")
+    
+    logging.basicConfig(
+        level=log_level,
+        format=log_format,
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ],
+        force=True  # Override the previous configuration
+    )
+    logging.info("Logging configured successfully")
+
+# Load configuration and setup logging
+config = load_config()
+setup_logging(config)
+
+# Define the file paths from configuration
+RECIPES_FILE = config["paths"]["recipes_file"]
+ADDONS_DB_FILE = config["paths"]["addons_db_file"]
+DB_MAX_AGE_DAYS = config["settings"]["db_max_age_days"]
+KUBEJS_ADDONS_URL = config["settings"]["kubejs_addons_url"]
 
 # Initialize the recipes dictionary
 recipes: Dict[str, Dict[str, Any]] = {}
 
-# KubeJS Addons URL
-KUBEJS_ADDONS_URL = "https://kubejs.com/wiki/addons"
+# Ensure the recipes file exists
+def ensure_recipes_file():
+    """Create recipes file if it doesn't exist."""
+    if not os.path.exists(RECIPES_FILE):
+        try:
+            with open(RECIPES_FILE, 'w') as f:
+                json.dump({}, f)
+            logging.info(f"Created empty recipes file: {RECIPES_FILE}")
+        except Exception as e:
+            logging.error(f"Failed to create recipes file: {str(e)}")
+
+# Make sure the recipes file exists
+ensure_recipes_file()
 
 def save_addons_to_db(addons: List[Dict[str, str]]) -> bool:
     """Save addons to the local database file.
@@ -88,10 +171,10 @@ def save_addons_to_db(addons: List[Dict[str, str]]) -> bool:
         with open(ADDONS_DB_FILE, 'w') as file:
             json.dump(db, file, indent=4)
 
-        print(f"Saved {len(addons)} addons to local database.")
+        logging.info(f"Saved {len(addons)} addons to local database.")
         return True
     except Exception as e:
-        print(f"Error saving addons to database: {str(e)}")
+        logging.error(f"Error saving addons to database: {str(e)}")
         return False
 
 def load_addons_from_db() -> Tuple[List[Dict[str, str]], Optional[datetime]]:
@@ -104,7 +187,7 @@ def load_addons_from_db() -> Tuple[List[Dict[str, str]], Optional[datetime]]:
     """
     try:
         if not os.path.exists(ADDONS_DB_FILE):
-            print("Addons database file not found.")
+            logging.info("Addons database file not found.")
             return [], None
 
         with open(ADDONS_DB_FILE, 'r') as file:
@@ -115,13 +198,13 @@ def load_addons_from_db() -> Tuple[List[Dict[str, str]], Optional[datetime]]:
             try:
                 timestamp = datetime.fromisoformat(db["timestamp"])
             except ValueError:
-                print("Invalid timestamp format in database.")
+                logging.warning("Invalid timestamp format in database.")
 
         addons = db.get("addons", [])
-        print(f"Loaded {len(addons)} addons from local database.")
+        logging.info(f"Loaded {len(addons)} addons from local database.")
         return addons, timestamp
     except Exception as e:
-        print(f"Error loading addons from database: {str(e)}")
+        logging.error(f"Error loading addons from database: {str(e)}")
         return [], None
 
 def is_db_outdated(timestamp: Optional[datetime]) -> bool:
@@ -139,6 +222,36 @@ def is_db_outdated(timestamp: Optional[datetime]) -> bool:
     max_age = timedelta(days=DB_MAX_AGE_DAYS)
     return datetime.now() - timestamp > max_age
 
+def get_fallback_addons() -> List[Dict[str, str]]:
+    """Get a list of fallback addons when web fetch and database fail.
+    
+    Returns:
+        List[Dict[str, str]]: A list of sample addon dictionaries
+    """
+    logging.warning("Using built-in fallback addon list")
+    return [
+        {
+            "name": "KubeJS Create",
+            "url": "https://kubejs.com/wiki/addons/kubejs-create"
+        },
+        {
+            "name": "KubeJS Mekanism",
+            "url": "https://kubejs.com/wiki/addons/kubejs-mekanism"
+        },
+        {
+            "name": "KubeJS Immersive Engineering",
+            "url": "https://kubejs.com/wiki/addons/kubejs-immersive-engineering"
+        },
+        {
+            "name": "KubeJS Thermal",
+            "url": "https://kubejs.com/wiki/addons/kubejs-thermal"
+        },
+        {
+            "name": "KubeJS Blood Magic",
+            "url": "https://kubejs.com/wiki/addons/kubejs-blood-magic"
+        }
+    ]
+
 def fetch_kubejs_addons() -> List[Dict[str, str]]:
     """Fetch KubeJS addons from the wiki page or local database.
 
@@ -150,14 +263,19 @@ def fetch_kubejs_addons() -> List[Dict[str, str]]:
 
     # If database exists and is not outdated, use it
     if addons and not is_db_outdated(timestamp):
-        print("Using addons from local database.")
+        logging.info("Using addons from local database.")
         return addons
 
     # Otherwise, try to fetch from the web
-    print("Fetching addons from the web...")
+    logging.info("Fetching addons from the web...")
     try:
         # Use urllib.request instead of requests
-        with urllib.request.urlopen(KUBEJS_ADDONS_URL) as response:
+        request = urllib.request.Request(
+            KUBEJS_ADDONS_URL,
+            headers={'User-Agent': 'Mozilla/5.0 KubeJS Recipe Manager'}  # Add user agent to avoid 403
+        )
+        
+        with urllib.request.urlopen(request, timeout=10) as response:
             # Check if the response is successful (200 OK)
             if response.status != 200:
                 raise Exception(f"HTTP Error: {response.status}")
@@ -175,20 +293,26 @@ def fetch_kubejs_addons() -> List[Dict[str, str]]:
             save_addons_to_db(web_addons)
             return web_addons
 
-        # If web fetch failed but we have old addons, use them
+        # If web fetch produced no results but we have old addons, use them
         if addons:
-            print("Web fetch failed, using older addons from local database.")
+            logging.warning("Web fetch produced no results, using older addons from local database.")
             return addons
-
-        # Otherwise, return empty list
-        return []
+            
+        # Try fallback addons
+        fallback_addons = get_fallback_addons()
+        save_addons_to_db(fallback_addons)  # Save fallbacks to database for future use
+        return fallback_addons
     except Exception as e:
-        print(f"Error fetching KubeJS addons from web: {str(e)}")
+        logging.error(f"Error fetching KubeJS addons from web: {str(e)}")
         # If web fetch failed but we have old addons, use them
         if addons:
-            print("Using older addons from local database.")
+            logging.info("Using older addons from local database.")
             return addons
-        return []
+            
+        # Try fallback addons if database is empty
+        fallback_addons = get_fallback_addons()
+        save_addons_to_db(fallback_addons)  # Save fallbacks to database for future use
+        return fallback_addons
 
 def choose_recipe_type() -> Tuple[bool, Optional[Dict[str, str]]]:
     """Ask user if they want to make normal Minecraft recipes or modded ones.
@@ -237,22 +361,40 @@ def choose_recipe_type() -> Tuple[bool, Optional[Dict[str, str]]]:
         return False, None
 
 def load_recipes() -> None:
-    """Load recipes from the JS file."""
+    """Load recipes from the JSON file."""
     global recipes
     try:
         if os.path.exists(RECIPES_FILE):
             with open(RECIPES_FILE, 'r') as file:
                 recipes = json.load(file)
-            print(f"Loaded {len(recipes)} recipes from {RECIPES_FILE}")
+            logging.info(f"Loaded {len(recipes)} recipes from {RECIPES_FILE}")
         else:
-            print(f"Recipe file {RECIPES_FILE} not found. Starting with empty recipe collection.")
+            logging.warning(f"Recipe file {RECIPES_FILE} not found. Creating empty recipe file.")
+            # Create an empty recipes file
+            with open(RECIPES_FILE, 'w') as file:
+                json.dump({}, file, indent=4)
+            recipes = {}
     except json.JSONDecodeError:
-        print(f"Error decoding JSON from {RECIPES_FILE}. Starting with empty recipe collection.")
+        logging.error(f"Error decoding JSON from {RECIPES_FILE}. Starting with empty recipe collection.")
+        # Backup the corrupted file and create a new empty one
+        backup_file = f"{RECIPES_FILE}.backup.{int(time.time())}"
+        try:
+            if os.path.exists(RECIPES_FILE):
+                os.rename(RECIPES_FILE, backup_file)
+                logging.warning(f"Corrupted recipe file backed up to {backup_file}")
+            # Create a new empty recipes file
+            with open(RECIPES_FILE, 'w') as file:
+                json.dump({}, file, indent=4)
+            recipes = {}
+        except Exception as e:
+            logging.error(f"Error backing up corrupted recipe file: {str(e)}")
+            recipes = {}
     except Exception as e:
-        print(f"Error loading recipes: {str(e)}")
+        logging.error(f"Error loading recipes: {str(e)}")
+        recipes = {}
 
 def save_recipes() -> bool:
-    """Save recipes to the JS file.
+    """Save recipes to the JSON file.
 
     Returns:
         bool: True if successful, False otherwise
@@ -260,6 +402,7 @@ def save_recipes() -> bool:
     try:
         with open(RECIPES_FILE, 'w') as file:
             json.dump(recipes, file, indent=4)
+        logging.info(f"Saved {len(recipes)} recipes to {RECIPES_FILE}")
         print(f"Saved {len(recipes)} recipes to {RECIPES_FILE}")
         return True
     except Exception as e:
@@ -515,17 +658,19 @@ def search_recipe() -> None:
 def export_recipes() -> None:
     """Export recipes to a different file."""
     try:
-        filename = input("Enter export filename (e.g., export.js): ").strip()
+        export_default = config["paths"].get("export_default", "export.js")
+        filename = input(f"Enter export filename (default: {export_default}): ").strip()
         if not filename:
-            print("Filename cannot be empty.")
-            return
+            filename = export_default
+            print(f"Using default filename: {export_default}")
 
-        if not filename.endswith('.js'):
+        if not filename.endswith('.js') and not filename.endswith('.json'):
             filename += '.js'
 
         with open(filename, 'w') as file:
             json.dump(recipes, file, indent=4)
 
+        logging.info(f"Recipes exported successfully to {filename}")
         print(f"Recipes exported successfully to {filename}.")
 
     except Exception as e:
@@ -1216,17 +1361,40 @@ class RecipeManagerApp:
             "for the KubeJS mod without having to manually edit JSON files."
         )
 
+def run_ipc() -> None:
+    """Run in IPC mode for communication with Electron."""
+    logging.info("Starting KubeJS Recipe Manager in IPC mode")
+    
+    # Load recipes
+    load_recipes()
+    
+    try:
+        # Process IPC input
+        handle_ipc_input()
+    except Exception as e:
+        logging.error(f"Error in IPC mode: {str(e)}")
+        print(json.dumps({
+            'action': 'error',
+            'success': False,
+            'error': f"IPC error: {str(e)}"
+        }))
+    finally:
+        # Ensure we perform cleanup
+        handle_graceful_shutdown()
+        
+    logging.info("IPC mode terminated")
+
 def run_gui() -> None:
-    """Run the GUI version of the KubeJS Recipe Manager."""
+    """Run the graphical user interface version of the KubeJS Recipe Manager."""
+    # Check if Tkinter is available
     if not TKINTER_AVAILABLE:
+        logging.error("Tkinter is not available. Cannot run GUI mode.")
         print("Error: Tkinter is not available. Cannot run GUI mode.")
         print("Falling back to CLI mode...")
         run_cli()
         return
-
+        
     try:
-        # Ask the user if they can see the GUI
-        print("Launching GUI window...")
         print("A GUI window should appear shortly.")
 
         root = tk.Tk()
@@ -1265,25 +1433,380 @@ def run_gui() -> None:
             messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
         else:
             print(f"An unexpected error occurred: {str(e)}")
-
-def main() -> None:
-    """Main function to run the KubeJS Recipe Manager."""
-    parser = argparse.ArgumentParser(description='KubeJS Recipe Manager')
-    parser.add_argument('--gui', action='store_true', help='Run in GUI mode (default)')
-    parser.add_argument('--cli', action='store_true', help='Run in CLI mode')
-    args = parser.parse_args()
-
-    # Try to run GUI first unless CLI is explicitly requested
-    if args.cli:
+        
+        # Fall back to CLI mode
+        print("Falling back to CLI mode due to error...")
         run_cli()
-    else:
-        # Try to run GUI, will fall back to CLI if Tkinter is not available
-        run_gui()
 
-if __name__ == "__main__":
+# ==========================================
+# IPC Mode Functions (for Electron frontend)
+# ==========================================
+
+def handle_ipc_input() -> None:
+    """Handle IPC input from stdin in JSON format."""
     try:
-        main()
-    except KeyboardInterrupt:
-        print("\nApplication terminated by user.")
+        while True:
+            # Read a line from stdin (sent from Electron)
+            line = input()
+            
+            # Parse the JSON message
+            try:
+                message = json.loads(line)
+                action = message.get('action')
+                
+                if action == 'exit':
+                    logging.info("Received exit command. Shutting down...")
+                    break
+                    
+                # Process the message based on the action
+                response = process_ipc_message(message)
+                
+                # Send the response as JSON
+                print(json.dumps(response))
+                
+            except json.JSONDecodeError as e:
+                logging.error(f"Invalid JSON received: {e}")
+                print(json.dumps({
+                    'success': False,
+                    'error': f"Invalid JSON: {str(e)}"
+                }))
+                
+    except EOFError:
+        # End of input stream (Electron closed)
+        logging.info("Input stream closed. Shutting down...")
     except Exception as e:
-        print(f"An unexpected error occurred: {str(e)}")
+        logging.error(f"Error in IPC mode: {str(e)}")
+        print(json.dumps({
+            'success': False,
+            'error': f"IPC error: {str(e)}"
+        }))
+
+def process_ipc_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Process an IPC message and return a response.
+    
+    Args:
+        message (Dict[str, Any]): The message to process
+        
+    Returns:
+        Dict[str, Any]: The response message
+    """
+    action = message.get('action')
+    logging.info(f"Processing IPC message: {action}")
+    
+    # Map actions to handler functions
+    handlers = {
+        'load_recipes': handle_load_recipes,
+        'save_recipe': handle_save_recipe,
+        'delete_recipe': handle_delete_recipe,
+        'search_recipes': handle_search_recipes,
+        'export_recipes': handle_export_recipes,
+        'fetch_addons': handle_fetch_addons
+    }
+    
+    # Call the appropriate handler or return an error
+    if action in handlers:
+        try:
+            return handlers[action](message)
+        except Exception as e:
+            logging.error(f"Error handling {action}: {str(e)}")
+            return {
+                'action': f"{action}_error",
+                'success': False,
+                'error': str(e)
+            }
+    else:
+        logging.warning(f"Unknown action: {action}")
+        return {
+            'action': 'unknown_action',
+            'success': False,
+            'error': f"Unknown action: {action}"
+        }
+
+def handle_load_recipes(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Load recipes and return them.
+    
+    Args:
+        message (Dict[str, Any]): The message requesting recipes
+        
+    Returns:
+        Dict[str, Any]: The response with recipes
+    """
+    try:
+        # Load recipes
+        load_recipes()
+        
+        return {
+            'action': 'recipes_loaded',
+            'success': True,
+            'recipes': recipes
+        }
+    except Exception as e:
+        logging.error(f"Error loading recipes: {str(e)}")
+        return {
+            'action': 'recipes_loaded',
+            'success': False,
+            'error': str(e)
+        }
+
+def handle_save_recipe(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Save a recipe.
+    
+    Args:
+        message (Dict[str, Any]): The message with recipe to save
+        
+    Returns:
+        Dict[str, Any]: The response indicating success or failure
+    """
+    try:
+        recipe_data = message.get('recipe', {})
+        recipe_name = message.get('recipeName')
+        is_new = message.get('isNew', True)
+        
+        if not recipe_name:
+            return {
+                'action': 'recipe_saved',
+                'success': False,
+                'error': "Recipe name is required"
+            }
+            
+        # Add or update the recipe
+        recipes[recipe_name] = recipe_data
+        
+        # Save all recipes
+        if save_recipes():
+            return {
+                'action': 'recipe_saved',
+                'success': True,
+                'recipeName': recipe_name,
+                'isNew': is_new
+            }
+        else:
+            return {
+                'action': 'recipe_saved',
+                'success': False,
+                'error': "Failed to save recipes"
+            }
+    except Exception as e:
+        logging.error(f"Error saving recipe: {str(e)}")
+        return {
+            'action': 'recipe_saved',
+            'success': False,
+            'error': str(e)
+        }
+
+def handle_delete_recipe(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete a recipe.
+    
+    Args:
+        message (Dict[str, Any]): The message with recipe to delete
+        
+    Returns:
+        Dict[str, Any]: The response indicating success or failure
+    """
+    try:
+        recipe_name = message.get('recipeName')
+        
+        if not recipe_name:
+            return {
+                'action': 'recipe_deleted',
+                'success': False,
+                'error': "Recipe name is required"
+            }
+            
+        if recipe_name not in recipes:
+            return {
+                'action': 'recipe_deleted',
+                'success': False,
+                'error': f"Recipe '{recipe_name}' not found"
+            }
+            
+        # Delete the recipe
+        del recipes[recipe_name]
+        
+        # Save all recipes
+        if save_recipes():
+            return {
+                'action': 'recipe_deleted',
+                'success': True,
+                'recipeName': recipe_name
+            }
+        else:
+            return {
+                'action': 'recipe_deleted',
+                'success': False,
+                'error': "Failed to save recipes after deletion"
+            }
+    except Exception as e:
+        logging.error(f"Error deleting recipe: {str(e)}")
+        return {
+            'action': 'recipe_deleted',
+            'success': False,
+            'error': str(e)
+        }
+
+def handle_search_recipes(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Search recipes based on a search term.
+    
+    Args:
+        message (Dict[str, Any]): The message with search term
+        
+    Returns:
+        Dict[str, Any]: The response with search results
+    """
+    try:
+        search_term = message.get('searchTerm', '').lower()
+        
+        if not search_term:
+            return {
+                'action': 'search_results',
+                'success': False,
+                'error': "Search term is required"
+            }
+        
+        # Search in recipe names, types, outputs, and ingredients
+        results = []
+        
+        for name, recipe in recipes.items():
+            recipe_json = json.dumps(recipe).lower()
+            if (search_term in name.lower() or 
+                search_term in recipe.get('type', '').lower() or
+                search_term in recipe.get('output', '').lower() or
+                search_term in recipe_json):
+                
+                results.append({
+                    'name': name,
+                    'recipe': recipe
+                })
+                
+        return {
+            'action': 'search_results',
+            'success': True,
+            'results': results,
+            'searchTerm': search_term
+        }
+    except Exception as e:
+        logging.error(f"Error searching recipes: {str(e)}")
+        return {
+            'action': 'search_results',
+            'success': False,
+            'error': str(e)
+        }
+
+def handle_export_recipes(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Export recipes to a file.
+    
+    Args:
+        message (Dict[str, Any]): The message with export options
+        
+    Returns:
+        Dict[str, Any]: The response indicating success or failure
+    """
+    try:
+        file_path = message.get('filePath')
+        
+        if not file_path:
+            return {
+                'action': 'recipes_exported',
+                'success': False,
+                'error': "File path is required"
+            }
+        
+        # Write the recipes to the file
+        with open(file_path, 'w') as file:
+            json.dump(recipes, file, indent=4)
+            
+        return {
+            'action': 'recipes_exported',
+            'success': True,
+            'filePath': file_path
+        }
+    except Exception as e:
+        logging.error(f"Error exporting recipes: {str(e)}")
+        return {
+            'action': 'recipes_exported',
+            'success': False,
+            'error': str(e)
+        }
+
+def handle_graceful_shutdown() -> None:
+    """Perform graceful shutdown tasks."""
+    logging.info("Performing graceful shutdown...")
+    
+    # Save any unsaved data if needed
+    try:
+        save_recipes()
+    except Exception as e:
+        logging.error(f"Error saving recipes during shutdown: {str(e)}")
+        
+    # Close any open files or connections
+    logging.info("Shutdown complete")
+
+def handle_graceful_shutdown() -> None:
+    """Perform graceful shutdown tasks."""
+    logging.info("Performing graceful shutdown...")
+    
+    # Save any unsaved data if needed
+    try:
+        save_recipes()
+    except Exception as e:
+        logging.error(f"Error saving recipes during shutdown: {str(e)}")
+        
+    # Close any open files or connections
+    logging.info("Shutdown complete")
+
+def handle_export_recipes(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Export recipes to a file.
+    
+    Args:
+        message (Dict[str, Any]): The message with export options
+        
+    Returns:
+        Dict[str, Any]: The response indicating success or failure
+    """
+    try:
+        file_path = message.get('filePath')
+        
+        if not file_path:
+            return {
+                'action': 'recipes_exported',
+                'success': False,
+                'error': "File path is required"
+            }
+        
+        # Write the recipes to the file
+        with open(file_path, 'w') as file:
+            json.dump(recipes, file, indent=4)
+            
+        return {
+            'action': 'recipes_exported',
+            'success': True,
+            'filePath': file_path
+        }
+    except Exception as e:
+        logging.error(f"Error exporting recipes: {str(e)}")
+        return {
+            'action': 'recipes_exported',
+            'success': False,
+            'error': str(e)
+        }
+
+# This duplicate section is removed - the original implementation is kept above
+                'addons': fallback_addons,
+                'warning': f"Error fetching addons: {str(e)}. Using fallback data."
+            }
+        except Exception as inner_e:
+            logging.error(f"Error getting fallback addons: {str(inner_e)}")
+            return {
+                'action': 'addons_fetched',
+                'action': 'addons_fetched',
+                'success': False,
+                'error': f"Error fetching addons: {str(e)}. Fallback also failed: {str(inner_e)}"
+            }
+                'warning': "Could not fetch addons from web or database, using fallback data"
+            }
+    except Exception as e:
+        logging.error(f"Error fetching addons: {str(e)}")
+        # Always return some data, even on error
+        try:
+            fallback_addons = get_fallback_addons()
+            return {
